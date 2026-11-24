@@ -25,9 +25,21 @@ builder.Services.AddMemoryCache();
 builder.Services.AddHttpClient();
 builder.Services.AddHttpClient<GeminiChatService>();
 
-// 4. Database Context Setup
+// 4. Database Context Setup (PostgreSQL on cloud, SQL Server locally)
+var rawConnectionString = builder.Configuration.GetConnectionString("DefaultConnection");
+
 builder.Services.AddDbContext<AppDbContext>(options =>
-    options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
+{
+    if (!string.IsNullOrWhiteSpace(rawConnectionString) && IsPostgresConnectionString(rawConnectionString))
+    {
+        var npgsqlConnectionString = NormalizePostgresConnectionString(rawConnectionString);
+        options.UseNpgsql(npgsqlConnectionString);
+    }
+    else
+    {
+        options.UseSqlServer(rawConnectionString);
+    }
+});
 
 // 5. Swagger API Documentation Setup
 builder.Services.AddSwaggerGen(options =>
@@ -149,3 +161,49 @@ app.UseAuthorization();
 app.MapControllers().RequireRateLimiting("FixedPolicy");
 
 app.Run();
+
+static bool IsPostgresConnectionString(string value)
+{
+    return value.Contains("Host=", StringComparison.OrdinalIgnoreCase) ||
+           value.StartsWith("postgres://", StringComparison.OrdinalIgnoreCase) ||
+           value.StartsWith("postgresql://", StringComparison.OrdinalIgnoreCase);
+}
+
+static string NormalizePostgresConnectionString(string connectionString)
+{
+    if (!connectionString.StartsWith("postgres://", StringComparison.OrdinalIgnoreCase) &&
+        !connectionString.StartsWith("postgresql://", StringComparison.OrdinalIgnoreCase))
+    {
+        return connectionString;
+    }
+
+    var uri = new Uri(connectionString);
+    var userInfo = uri.UserInfo.Split(':', 2);
+    var username = userInfo.Length > 0 ? Uri.UnescapeDataString(userInfo[0]) : string.Empty;
+    var password = userInfo.Length > 1 ? Uri.UnescapeDataString(userInfo[1]) : string.Empty;
+    var database = uri.AbsolutePath.TrimStart('/');
+    var port = uri.Port > 0 ? uri.Port : 5432;
+
+    var sb = new System.Text.StringBuilder();
+    sb.Append($"Host={uri.Host};Port={port};Database={database};Username={username};Password={password};");
+
+    var query = uri.Query.TrimStart('?');
+    if (!string.IsNullOrWhiteSpace(query))
+    {
+        foreach (var part in query.Split('&', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var kv = part.Split('=', 2);
+            if (kv.Length == 2 && kv[0].Equals("sslmode", StringComparison.OrdinalIgnoreCase))
+            {
+                sb.Append($"SSL Mode={kv[1]};Trust Server Certificate=true;");
+            }
+        }
+    }
+
+    if (!sb.ToString().Contains("SSL Mode=", StringComparison.OrdinalIgnoreCase))
+    {
+        sb.Append("SSL Mode=Require;Trust Server Certificate=true;");
+    }
+
+    return sb.ToString();
+}
