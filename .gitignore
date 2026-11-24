@@ -1,0 +1,11 @@
+node_modules/
+dist/
+build/
+.env
+.env.local
+bin/
+obj/
+.vs/
+*.user
+
+SalesnPurchase.API/appsettings.Development.json
